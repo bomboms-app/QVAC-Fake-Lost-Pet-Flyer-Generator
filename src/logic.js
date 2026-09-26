@@ -1,71 +1,80 @@
-// QVAC Fake Lost Pet Flyer Generator — core logic.
-// completion() writes the result from a single user input field.
-// The worry meter is a deterministic score from keyword density
-// and length — never the model rating its own writing.
-
 import { completion } from "@qvac/sdk";
 
-function looksUnusable(text) {
-  if (!text || text.trim().length === 0) return true;
-  if (text.length > 500) return true;
-  if (text.length < 15) return true;
-  if (/^input:/i.test(text.trim())) return true;
-  const bad = [
-    "i cannot", "i can't", "as an ai", "i'm not able", "i do not have", "i don't have",
-    "didn't input", "did not input", "not enough information", "please provide more",
-    "please try again", "i'd be happy to help", "i'll be happy to help", "could you provide",
-    "can you provide", "i need more", "please give me more",
-  ];
-  const lower = text.toLowerCase();
-  return bad.some((phrase) => lower.includes(phrase));
+function cleanOutput(text) {
+  return text
+    .trim()
+    .replace(/^```[\s\S]*?\n/, "")
+    .replace(/```$/, "")
+    .trim();
 }
 
-const FALLBACK = (v) => `Missing: a beloved pet who is ${v}. Please check your yard and call if seen. Reward offered.`;
+const fallbackAlert = (pet) => `
+LOST PET ALERT
 
-export async function generate(modelId, input) {
+${pet.name} is a missing ${pet.type}.
+
+Appearance: ${pet.appearance}
+Last seen: ${pet.location}
+Distinctive features: ${pet.features}
+
+If you see ${pet.name}, please contact: ${pet.contact}
+`;
+
+export async function generate(modelId, pet) {
+  const prompt = `
+Create a clear lost-pet alert using the information below.
+
+Pet name: ${pet.name}
+Animal type: ${pet.type}
+Appearance: ${pet.appearance}
+Last seen location: ${pet.location}
+Distinctive features: ${pet.features}
+Contact information: ${pet.contact}
+
+Format the response exactly with these sections:
+
+LOST PET ALERT
+PET DETAILS
+LAST SEEN
+IDENTIFICATION CLUES
+IF YOU SEE THIS PET
+CONTACT
+
+Keep the alert concise, practical, and easy to share.
+Do not invent information that was not provided.
+Return only the finished alert.
+`;
+
   const run = completion({
     modelId,
     history: [
       {
         role: "system",
-        content: ((v) => `Write one short, heartfelt fake lost pet flyer description (1-2 sentences) for a pet with this personality: ${v}. Reply with ONLY the description, no preamble.`)(input),
+        content: "You are PetPulse, a local lost-pet alert assistant."
       },
-      { role: "user", content: `Input: ${input}` },
+      {
+        role: "user",
+        content: prompt
+      }
     ],
     stream: true,
-    completionOpts: { temperature: 0.9, maxTokens: 150 },
+    completionOpts: {
+      temperature: 0.7,
+      maxTokens: 300
+    }
   });
 
   let text = "";
-  for await (const token of run.tokenStream) text += token;
-  text = text
-    .trim()
-    .replace(/^.*?\b(?:here'?s|here is)\b[^:\n]*:\s*\n*/i, "")
-    .trim()
-    .replace(/^subject:[^\n]*\n+/i, "")
-    .trim()
-    .replace(/^\([^)]*\)\s*/, "")
-    .trim()
-    .split("\n")[0]
-    .trim()
-    .replace(/^\*+|\*+$/g, "")
-    .trim()
-    .replace(/^["']/, "")
-    .replace(/["']$/, "")
-    .replace(/:\s*$/, "")
-    .replace(/"/g, "")
-    .trim();
 
-  const result = looksUnusable(text) ? FALLBACK(input) : text;
-  return { result, worry: scoreWorry(result) };
-}
+  for await (const token of run.tokenStream) {
+    text += token;
+  }
 
-const KEYWORDS = ["missing", "please", "reward", "beloved", "last seen", "call", "home"];
+  text = cleanOutput(text);
 
-function scoreWorry(text) {
-  const lower = text.toLowerCase();
-  let score = 45;
-  score += KEYWORDS.filter((w) => lower.includes(w)).length * 8;
-  score += Math.min(text.split(/\s+/).length, 20);
-  return Math.max(1, Math.min(99, Math.round(score)));
+  if (!text || text.length < 30) {
+    text = fallbackAlert(pet);
+  }
+
+  return { result: text };
 }
